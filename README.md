@@ -1,6 +1,6 @@
 # multi-agent-vuln-research
 
-An autonomous, multi-agent vulnerability research framework for [Claude Code](https://claude.ai/download). Six specialized AI agents discover, analyze, debate, build PoCs, execute them in Docker, and produce graded security reports — without human intervention.
+An autonomous, multi-agent vulnerability research framework for [Claude Code](https://claude.ai/download). Six specialized AI agents discover, analyze, challenge each other's findings, build PoCs, execute them in Docker, and produce graded security reports — without human intervention.
 
 **Core principle: No finding is CONFIRMED unless a PoC runs successfully in Docker AND it survives adversarial review.**
 
@@ -173,7 +173,7 @@ why did the PoC for 05 fail?
 ### Alternative entry points
 
 ```
-# Feed existing findings through the PoC + debate pipeline (skip discovery)
+# Feed existing findings through the PoC + review pipeline (skip discovery)
 /vulnresearch-from-findings ./my-existing-findings.md
 
 # Re-run a specific PoC after manual edits
@@ -189,9 +189,9 @@ why did the PoC for 05 fail?
 | **Hunter** | `.claude/agents/hunter.md` | Offensive discovery — find every potential issue |
 | **Analyst** | `.claude/agents/analyst.md` | Deep root-cause analysis, reachability, PoC blueprints |
 | **Devil's Advocate** | `.claude/agents/devils-advocate.md` | Adversarial critic — try to disprove every finding |
-| **PoC Builder** | `.claude/agents/poc-builder.md` | Create runnable exploit + Docker environment per finding |
+| **PoC Builder** | `.claude/agents/poc-builder.md` | Two-phase: recon endpoints, then build exploit |
 | **PoC Runner** | `.claude/agents/poc-runner.md` | Execute PoCs, capture evidence, skeptical of false PASSes |
-| **Report Synthesizer** | `.claude/agents/report-synthesizer.md` | Final graded report with full debate transcripts |
+| **Report Synthesizer** | `.claude/agents/report-synthesizer.md` | Final graded report with full review transcripts |
 
 ### Pipeline (per subsystem)
 
@@ -246,7 +246,7 @@ REVIEW ROUND 2 — "Is this correctly rated?"
 Every rejected finding is preserved with:
 - What it looked like and why it was flagged
 - Specific evidence for why it was rejected
-- Which stage killed it and which agent's argument won
+- Which stage killed it (Hunter self-filter, Analyst triage, Review Round 1, PoC failure, Review Round 2)
 - **Chaining potential** — could this combine with another finding to form an attack path?
 
 ## Configuration
@@ -296,20 +296,20 @@ The #1 failure mode of AI audits is the agent rushing later subsystems. multi-ag
 
 1. **Explicit No Shortcuts Policy** in CLAUDE.md with ❌/✅ examples
 2. **Quality gate per subsystem** — a JSON checklist written to `progress.json` that must pass before moving on
-3. **Debate exchange minimums** — at least 3 exchanges per finding per round, tracked in the checklist
-4. **Compaction instructions** — when context fills up, the agent is told to compact and resume, not rush to finish
+3. **Adversarial review requirements** — Challenger and Defender agents must produce substantive arguments, tracked in the checklist
+4. **Compaction instructions** — compact after each subsystem (never mid-subsystem), then resume from disk state
 
 ## Token usage
 
-For a typical audit of a medium-sized codebase (~50K-100K lines, ~10 subsystems):
+For a typical audit of a medium-sized codebase (~50K-100K lines, 5-7 subsystems):
 
 | Component | Tokens per subsystem | Notes |
 |-----------|---------------------|-------|
 | Hunter | ~200-400K | Scales with code size |
 | Analyst | ~300-500K | Deep analysis per finding |
-| Debate Round 1 | ~200-400K | 3-4 exchanges × findings |
-| PoC Build + Run | ~200-400K per finding | Includes retries |
-| Debate Round 2 | ~200-400K | With PoC evidence |
+| Review Round 1 | ~200-400K | Challenger + Defender per finding |
+| PoC Recon + Build + Run | ~200-400K per finding | Two-phase build + retries |
+| Review Round 2 | ~200-400K | With PoC evidence |
 | Report Synthesis | ~100-200K | Per subsystem |
 
 **Estimated total: 3-8M tokens for a full audit.** Token-heavy by design — thoroughness is the point.
@@ -320,17 +320,15 @@ All state lives on disk:
 - `progress.json` — pipeline stage, subsystem status, quality gates, finding states
 - `FINDINGS.md` — confirmed and plausible findings index
 - `WEAK.md` — all rejected findings
+- `base-environment/` — the shared target environment (Docker keeps running)
 - `pocs/*/README.md` — individual reports
 - `pocs/*/RESULT.md` — execution evidence
 
 To resume after a crash, context compaction, or session restart:
 ```bash
-claude
+claude -p "go"
 ```
-```
-go
-```
-It reads `progress.json` and picks up exactly where it left off.
+It reads `progress.json`, verifies the base environment is still running, and picks up exactly where it left off.
 
 ## Limitations
 
