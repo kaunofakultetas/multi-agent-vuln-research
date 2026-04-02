@@ -626,6 +626,32 @@ Preserved for chaining. Harmless alone, potentially dangerous combined.
 - ❌ "PoC failed so it goes to WEAK.md"
 - ✅ Strong code evidence with PoC failure (POC_BUG/ENV_MISMATCH) = PLAUSIBLE in FINDINGS.md
 
+### NEVER spawn more than 2 agents at once for different subsystems
+- ❌ "Let me spawn 4 hunters in parallel for efficiency"
+- ✅ One subsystem at a time. Finish it completely. Then next.
+
+### If context is filling up, COMPACT — don't batch
+- ❌ "Given context limits, I'll fast-track the remaining subsystems"
+- ✅ Compact after the current subsystem, resume fresh with full pipeline
+
+### Quality Gate Verification
+Before marking a subsystem complete, the team lead must list the agents 
+actually spawned for this subsystem by checking progress.json agent_log:
+
+After EACH agent spawn, immediately append to progress.json:
+  "agent_log": ["hunter-auth", "fuzzer-auth", "analyst-auth", "challenger-auth", "defender-auth"]
+
+Before marking complete, verify agent_log contains ALL of:
+  - hunter-{subsystem}
+  - fuzzer-{subsystem}  
+  - analyst-{subsystem}
+  - challenger-{subsystem} (Review Round 1)
+  - defender-{subsystem} (Review Round 1)
+  - challenger-{subsystem}-r2 (Review Round 2)
+  - defender-{subsystem}-r2 (Review Round 2)
+
+If ANY is missing, the subsystem is NOT complete. Go back and run the missing stage.
+
 ## Team Lead Rules
 
 1. **Base environment FIRST.** Source must match runtime.
