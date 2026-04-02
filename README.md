@@ -1,6 +1,6 @@
 # multi-agent-vuln-research
 
-An autonomous, multi-agent vulnerability research framework for [Claude Code](https://claude.ai/download). Six specialized AI agents discover, analyze, challenge each other's findings, build PoCs, execute them in Docker, and produce graded security reports — without human intervention.
+An autonomous, multi-agent vulnerability research framework for [Claude Code](https://claude.ai/download). Seven specialized AI agents — including a black-box fuzzer — discover, analyze, challenge each other's findings, build PoCs, execute them in Docker, and produce graded security reports — without human intervention.
 
 **Core principle: No finding is CONFIRMED unless a PoC runs successfully in Docker AND it survives adversarial review.**
 
@@ -11,20 +11,20 @@ An autonomous, multi-agent vulnerability research framework for [Claude Code](ht
   │  source → keep running │
   └────────────┬───────────┘
                │
-   ══════╤═════╧════════════
-    FOR EACH SUBSYSTEM:
-   ══════╪══════════════════
+   ══════╤═════╧════════════════
+    FOR EACH SUBSYSTEM (8-10):
+   ══════╪══════════════════════
                │
-        ┌──────┴───────┐
-        │    HUNTER    │
-        │   discover   │
-        └──────┬───────┘
+     ┌─────────┴─────────┐
+     │  HUNTER + FUZZER   │
+     │  source + blackbox │
+     └─────────┬─────────┘
                │
                ▼
-        ┌──────────────┐
-        │   ANALYST    │
-        │    verify    │
-        └──────┬───────┘
+  ┌────────────────────────┐
+  │  MITIGATION ANALYST    │
+  │  find what protects    │
+  └────────────┬───────────┘
                │
                ▼
   ┌────────────────────────┐
@@ -53,6 +53,27 @@ An autonomous, multi-agent vulnerability research framework for [Claude Code](ht
         │  SYNTHESIZER │
         │ final report │
         └──────────────┘
+               │
+   ══════╤═════╧════════════════
+    AFTER ALL SUBSYSTEMS:
+   ══════╪══════════════════════
+               │
+               ▼
+  ┌────────────────────────┐
+  │  SENIOR HUNTER PASS    │
+  │  cross-component bugs  │
+  └────────────┬───────────┘
+               │
+               ▼
+  ┌────────────────────────┐
+  │  CHAINING ANALYSIS     │
+  │  multi-finding attacks │
+  └────────────┬───────────┘
+               │
+               ▼
+        ┌──────────────┐
+        │ FINAL REPORT │
+        └──────────────┘
 ```
 
 ## Why?
@@ -63,11 +84,12 @@ AI-assisted vulnerability research has a honesty problem. A single agent will:
 - Skip verification when the analysis "looks convincing enough"
 - Rush later parts of the audit to finish faster
 
-multi-agent-vuln-research solves this with three mechanisms:
+multi-agent-vuln-research solves this with four mechanisms:
 
 1. **Adversarial review** — A Challenger agent tries to disprove each finding, then a Defender agent rebuts. The team lead rules on each. Findings that survive are real.
 2. **Execution gating** — Every finding gets a PoC run against a shared Docker environment built from the target's own source code. If it doesn't trigger, it's not CONFIRMED. Period.
-3. **Anti-shortcut enforcement** — Quality gates, completion checklists, and explicit rules prevent the agents from batching, rushing, or skipping stages on later subsystems.
+3. **Source + black-box** — A Hunter reads code while a Fuzzer throws payloads at the running target. Bugs that code review misses, fuzzing catches — and vice versa.
+4. **Anti-shortcut enforcement** — Quality gates, completion checklists, and explicit rules prevent the agents from batching, rushing, or skipping stages on later subsystems.
 
 ## What you get
 
@@ -132,9 +154,10 @@ claude -p "go"
 
 That's it. The agents will:
 1. Look around, identify the project, and build a base environment from the target's source code
-2. Group the codebase into 5-7 subsystems by attack surface
-3. Work through each subsystem with the full pipeline (discovery → analysis → adversarial review → PoC → review → report)
-4. Produce FINDINGS.md, WEAK.md, and PoCs that run against the shared environment
+2. Split the codebase into 8-10 subsystems — one per attack surface, no grouping
+3. Work through each subsystem with the full pipeline (hunter + fuzzer → mitigation analysis → adversarial review → PoC → review → report)
+4. Run a senior hunter second pass and cross-subsystem chaining analysis
+5. Produce FINDINGS.md, WEAK.md, and PoCs that run against the shared environment
 
 ### 3. Walk away
 
@@ -186,34 +209,41 @@ why did the PoC for 05 fail?
 
 | Agent | File | Role |
 |-------|------|------|
-| **Hunter** | `.claude/agents/hunter.md` | Offensive discovery — find every potential issue |
-| **Analyst** | `.claude/agents/analyst.md` | Deep root-cause analysis, reachability, PoC blueprints |
-| **Devil's Advocate** | `.claude/agents/devils-advocate.md` | Adversarial critic — try to disprove every finding |
+| **Hunter** | `.claude/agents/hunter.md` | Source code review — report ALL potential issues, no self-filtering |
+| **Fuzzer** | `.claude/agents/fuzzer.md` | Black-box testing — fuzz the running target without reading source |
+| **Analyst** | `.claude/agents/analyst.md` | Mitigation analyst — find what PROTECTS against each finding |
+| **Devil's Advocate** | `.claude/agents/devils-advocate.md` | Dual role: Challenger (attack findings) or Defender (rebut challenges) |
 | **PoC Builder** | `.claude/agents/poc-builder.md` | Two-phase: recon endpoints, then build exploit |
-| **PoC Runner** | `.claude/agents/poc-runner.md` | Execute PoCs, capture evidence, skeptical of false PASSes |
+| **PoC Runner** | `.claude/agents/poc-runner.md` | Execute PoCs, classify failures, skeptical of false PASSes |
 | **Report Synthesizer** | `.claude/agents/report-synthesizer.md` | Final graded report with full review transcripts |
 
 ### Pipeline (per subsystem)
 
 ```
-Stage 0  BASE ENVIRONMENT   Build target from source, keep running (once at start)
-         ─────────────────────────────────────────────────────────────────────
-Stage 1  DISCOVERY           Hunter scans subsystem, self-filters LOW to WEAK.md
-Stage 2  ANALYSIS            Analyst verifies root cause + reachability (rejects → WEAK.md)
-Stage 3  REVIEW ROUND 1      Challenger challenges → Defender rebuts → Team lead rules
-Stage 4  PoC ENGINEERING     Phase 1: Recon endpoints. Phase 2: Build exploit
-Stage 5  EXECUTION            PoC Runner runs against shared env (max 2 retries for POC_BUG)
-Stage 6  REVIEW ROUND 2      Challenger + Defender with PoC evidence → final classification
-Stage 7  SYNTHESIS            Reports written, FINDINGS.md + WEAK.md updated, quality gate
+Stage 0   BASE ENVIRONMENT    Build target from source, keep running (once at start)
+          ───────────────────────────────────────────────────────────────────────
+Stage 1   DISCOVERY            Hunter (source) + Fuzzer (black-box) → merge all findings
+Stage 2   MITIGATION ANALYSIS  Analyst finds protections, not bugs (rejects → WEAK.md)
+Stage 3   REVIEW ROUND 1       Challenger challenges → Defender rebuts → Team lead rules
+Stage 4   PoC ENGINEERING      Phase 1: Recon endpoints. Phase 2: Build exploit
+Stage 5   EXECUTION             PoC Runner classifies failures (max 2 retries for POC_BUG)
+Stage 6   REVIEW ROUND 2       Challenger + Defender with PoC evidence → final classification
+Stage 7   SYNTHESIS             Reports written, FINDINGS.md + WEAK.md updated, quality gate
+          ───────────────────────────────────────────────────────────────────────
+Stage 8   SENIOR HUNTER PASS   Re-examine critical files, cross-component logic bugs
+Stage 9   CHAINING ANALYSIS    Combine WEAK.md + FINDINGS.md findings into attack chains
+Stage 10  FINAL REPORT          Executive summary, cleanup pass
 ```
 
 ### Classification
 
-| Classification | Requires |
-|---------------|----------|
-| **CONFIRMED** | PoC PASS + survived both review rounds |
-| **PLAUSIBLE** | Strong analysis but PoC failed (POC_BUG after retries) or ENV_MISMATCH |
-| **REJECTED** | Disproved by evidence → logged in WEAK.md for chaining review |
+| Classification | Requires | Goes to |
+|---------------|----------|---------|
+| **CONFIRMED** | PoC PASS + survived both review rounds | FINDINGS.md |
+| **PLAUSIBLE** | Strong code evidence but PoC failed (POC_BUG/ENV_MISMATCH), or can't be PoC'd in Docker | FINDINGS.md |
+| **REJECTED** | Disproved by evidence (TARGET_NOT_VULNERABLE, DA disproved, full mitigation found) | WEAK.md |
+
+PLAUSIBLE is valuable — crypto flaws, race conditions, and multi-instance bugs can't always be demonstrated in a single Docker container. They belong in FINDINGS.md, not WEAK.md.
 
 ### PoC failure classification
 
@@ -241,13 +271,22 @@ REVIEW ROUND 2 — "Is this correctly rated?"
   Team lead:   Mixed — downgrade from CRITICAL to HIGH. Real DoS, plausible RCE.
 ```
 
+### Post-subsystem stages
+
+After all subsystems complete:
+
+- **Senior Hunter Pass** — A second-pass hunter re-examines the most critical files across all subsystems with the full findings context. Looks for cross-component logic bugs and multi-step chains that per-subsystem hunters miss.
+- **Chaining Analysis** — Reads all of FINDINGS.md + WEAK.md together. Finds combinations of 2+ findings that form higher-impact attack paths. Viable chains go through the PoC pipeline; speculative chains are recorded in WEAK.md.
+
 ### WEAK.md — nothing is thrown away
 
 Every rejected finding is preserved with:
 - What it looked like and why it was flagged
 - Specific evidence for why it was rejected
-- Which stage killed it (Hunter self-filter, Analyst triage, Review Round 1, PoC failure, Review Round 2)
+- Which stage killed it (Analyst triage, Review Round 1, PoC failure, Review Round 2)
 - **Chaining potential** — could this combine with another finding to form an attack path?
+
+After Stage 9, WEAK.md also includes a **Potential Chains** section with multi-finding attack paths that were too speculative for FINDINGS.md.
 
 ## Configuration
 
@@ -278,10 +317,11 @@ Every rejected finding is preserved with:
 
 **Adjust agent behavior** — edit the agent definitions in `.claude/agents/`:
 - `hunter.md` — change discovery depth, add target-specific patterns
-- `analyst.md` — adjust reachability analysis, CVSS scoring approach
-- `devils-advocate.md` — tune severity calibration guide, skepticism level
+- `fuzzer.md` — adjust fuzz payloads, race condition testing, auth boundary checks
+- `analyst.md` — tune mitigation analysis, protection assessment criteria
+- `devils-advocate.md` — tune severity calibration guide, Challenger/Defender behavior
 - `poc-builder.md` — modify Docker templates, retry strategies
-- `poc-runner.md` — change verification standards
+- `poc-runner.md` — change failure classification criteria, verification standards
 - `report-synthesizer.md` — adjust report format, classification thresholds
 
 **Add target-specific knowledge** — create `.claude/skills/` with:
@@ -294,25 +334,29 @@ Every rejected finding is preserved with:
 
 The #1 failure mode of AI audits is the agent rushing later subsystems. multi-agent-vuln-research prevents this with:
 
-1. **Explicit No Shortcuts Policy** in CLAUDE.md with ❌/✅ examples
-2. **Quality gate per subsystem** — a JSON checklist written to `progress.json` that must pass before moving on
-3. **Adversarial review requirements** — Challenger and Defender agents must produce substantive arguments, tracked in the checklist
-4. **Compaction instructions** — compact after each subsystem (never mid-subsystem), then resume from disk state
+1. **Explicit No Shortcuts Policy** in CLAUDE.md — never combine subsystems, never skip stages, never rush later subsystems
+2. **No Hunter filtering** — the Hunter reports ALL findings (LOW/MEDIUM/HIGH confidence). The pipeline filters, not the Hunter.
+3. **PLAUSIBLE is valuable** — PoC failure alone doesn't kill a finding. Strong code evidence with a POC_BUG or ENV_MISMATCH failure stays in FINDINGS.md as PLAUSIBLE.
+4. **Quality gate per subsystem** — a JSON checklist in `progress.json` must pass before moving on
+5. **Compaction instructions** — compact after each subsystem (never mid-subsystem), then resume from disk state
 
 ## Token usage
 
-For a typical audit of a medium-sized codebase (~50K-100K lines, 5-7 subsystems):
+For a typical audit of a medium-sized codebase (~50K-100K lines, 8-10 subsystems):
 
 | Component | Tokens per subsystem | Notes |
 |-----------|---------------------|-------|
 | Hunter | ~200-400K | Scales with code size |
-| Analyst | ~300-500K | Deep analysis per finding |
+| Fuzzer | ~100-200K | Black-box payloads per subsystem |
+| Mitigation Analyst | ~300-500K | Finds protections per finding |
 | Review Round 1 | ~200-400K | Challenger + Defender per finding |
 | PoC Recon + Build + Run | ~200-400K per finding | Two-phase build + retries |
 | Review Round 2 | ~200-400K | With PoC evidence |
 | Report Synthesis | ~100-200K | Per subsystem |
 
-**Estimated total: 3-8M tokens for a full audit.** Token-heavy by design — thoroughness is the point.
+Post-subsystem stages (Senior Hunter + Chaining + Final Report) add ~500K-1M.
+
+**Estimated total: 5-12M tokens for a full audit.** Token-heavy by design — thoroughness is the point.
 
 ## Resumability
 
@@ -335,13 +379,13 @@ It reads `progress.json`, verifies the base environment is still running, and pi
 - **Claude's safety guardrails** limit exploit complexity. The PoC Builder creates trigger/crash PoCs, not weaponized exploits. For full exploitation chains, use the PoC output as a starting point for manual development.
 - **Single-provider dependency.** The framework runs entirely on Claude. Findings are bounded by Claude's reasoning capabilities on the target language/framework.
 - **Docker-based PoCs only.** Vulnerabilities that require bare-metal, specific hardware, or non-containerizable environments won't get PoC verification.
-- **Token cost.** A thorough audit is expensive. Budget 3-8M tokens per run.
+- **Token cost.** A thorough audit is expensive. Budget 5-12M tokens per run.
 
 ## Contributing
 
 Contributions welcome. Areas that would have the most impact:
 
-- **Agent definitions** — improved prompts for any of the 6 agents
+- **Agent definitions** — improved prompts for any of the 7 agents
 - **PoC templates** — Docker patterns for common target types (Java, Go, Rust, Node.js)
 - **Verification patterns** — better verify.sh check examples for more vulnerability classes
 - **Target-specific skills** — `.claude/skills/` packages for popular open-source projects
