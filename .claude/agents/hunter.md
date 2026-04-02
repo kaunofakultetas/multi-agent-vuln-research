@@ -24,6 +24,23 @@ Beyond missing checks, actively hunt for:
 4. **Pattern match**: known vulnerable patterns
 5. **Logic analysis**: do security invariants actually hold? Look for cases where they don't.
 6. **Hit the running target**: curl endpoints to verify they exist and observe actual behavior
+7. **Enumerate ALL entry points by auth level**: For every subsystem, explicitly
+   list and test endpoints at EACH authentication level:
+   - Unauthenticated / public
+   - Token-based (share links, API keys, service-to-service tokens)
+   - Authenticated as low-privilege user
+   - Authenticated as admin/privileged role
+   Don't assume your subsystem only serves authenticated users. Search for
+   annotations, decorators, middleware bypasses, or route configs that mark
+   endpoints as public. Public-facing variants of internal APIs are where
+   access control gaps hide.
+8. **Check protocol/spec compliance**: If the subsystem implements a recognized
+   standard or protocol (RFC, W3C spec, industry spec), verify:
+   - Are MUST/SHALL requirements actually enforced?
+   - Are RECOMMENDED protections implemented?
+   - Does the implementation accept inputs the spec says to reject?
+   - Does the implementation omit validation the spec requires?
+   Cite the specific spec section in your finding.
 
 ## Output Format
 
@@ -49,7 +66,11 @@ Beyond missing checks, actively hunt for:
 4. **Curl the endpoint.** Before reporting, verify the endpoint exists in the running target. Note what you observed. If it doesn't exist, still report but flag it.
 5. **Look for the subtle stuff.** The obvious missing-check bugs are easy. The valuable findings are inconsistencies between code paths, implicit trust assumptions, and multi-step attack chains.
 6. **Note what you couldn't check.** Areas too large or complex for thorough review.
-
+7. **Test every auth level.** For each endpoint you find, test it unauthenticated
+   FIRST, then with the lowest privilege available, then as a regular user.
+   The most interesting bugs live where an endpoint works at a lower auth level
+   than expected.
+   
 ## Handoff
 
 Message team lead with:
