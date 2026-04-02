@@ -2,10 +2,20 @@
 
 An autonomous, multi-agent vulnerability research framework for [Claude Code](https://claude.ai/download). Six specialized AI agents discover, analyze, debate, build PoCs, execute them in Docker, and produce graded security reports — without human intervention.
 
-**Core principle: No finding is CONFIRMED unless a PoC runs successfully in Docker AND it survives adversarial debate.**
+**Core principle: No finding is CONFIRMED unless a PoC runs successfully in Docker AND it survives adversarial review.**
 
 ```
-        ┌──────────────┐
+  ┌────────────────────────┐
+  │   STAGE 0: BASE ENV    │
+  │  build target from     │
+  │  source → keep running │
+  └────────────┬───────────┘
+               │
+   ══════╤═════╧════════════
+    FOR EACH SUBSYSTEM:
+   ══════╪══════════════════
+               │
+        ┌──────┴───────┐
         │    HUNTER    │
         │   discover   │
         └──────┬───────┘
@@ -18,25 +28,24 @@ An autonomous, multi-agent vulnerability research framework for [Claude Code](ht
                │
                ▼
   ┌────────────────────────┐
-  │     DEBATE ROUND 1     │
-  │ Analyst ◄──► Devil's   │
-  │        Advocate        │
-  │ 3-4 exchanges/finding  │
+  │   ADVERSARIAL REVIEW   │
+  │   "Is this real?"      │
+  │ Challenger → Defender  │
+  │ → Team lead rules      │
   └────────────┬───────────┘
                │
                ▼
-        ┌──────────────┐
-        │  PoC BUILD   │
-        │  + EXECUTE   │
-        │  + RETRY     │
-        └──────┬───────┘
+  ┌────────────────────────┐
+  │  PoC BUILD + EXECUTE   │
+  │  recon first, then     │
+  │  exploit → retry ×2    │
+  └────────────┬───────────┘
                │
                ▼
   ┌────────────────────────┐
-  │     DEBATE ROUND 2     │
-  │ Analyst ◄──► Devil's   │
-  │        Advocate        │
-  │   with PoC evidence    │
+  │   ADVERSARIAL REVIEW   │
+  │  "Correctly rated?"    │
+  │  with PoC evidence     │
   └────────────┬───────────┘
                │
                ▼
@@ -56,8 +65,8 @@ AI-assisted vulnerability research has a honesty problem. A single agent will:
 
 multi-agent-vuln-research solves this with three mechanisms:
 
-1. **Adversarial debate** — Two agents (Analyst and Devil's Advocate) argue back and forth over every finding. The DA's job is to disprove things. Findings that survive are real.
-2. **Execution gating** — Every finding gets a self-contained Docker PoC with specific verification checks. If it doesn't trigger, it's not CONFIRMED. Period.
+1. **Adversarial review** — A Challenger agent tries to disprove each finding, then a Defender agent rebuts. The team lead rules on each. Findings that survive are real.
+2. **Execution gating** — Every finding gets a PoC run against a shared Docker environment built from the target's own source code. If it doesn't trigger, it's not CONFIRMED. Period.
 3. **Anti-shortcut enforcement** — Quality gates, completion checklists, and explicit rules prevent the agents from batching, rushing, or skipping stages on later subsystems.
 
 ## What you get
@@ -66,21 +75,27 @@ multi-agent-vuln-research solves this with three mechanisms:
 ├── FINDINGS.md                         # Summary index with links to each report
 ├── WEAK.md                             # Rejected findings preserved for chain analysis
 ├── progress.json                       # Full pipeline state (resumable)
+├── base-environment/
+│   ├── docker-compose.yml              # Shared persistent target environment
+│   ├── Dockerfile                      # Built FROM the source code being analyzed
+│   ├── setup.sh                        # One-time target initialization
+│   ├── lib.sh                          # Shared helper functions for PoCs
+│   └── .env                            # Shared config (ports, passwords, etc.)
 ├── pocs/
 │   ├── 01-share-password-hash-leak/
-│   │   ├── README.md                   # Full report: root cause, debate log, evidence, fix
-│   │   ├── docker-compose.yml          # Self-contained vulnerable environment
+│   │   ├── README.md                   # Full report: root cause, review log, evidence, fix
 │   │   ├── exploit.py                  # Working exploit
-│   │   ├── verify.sh                   # Automated: start → exploit → verify → cleanup
+│   │   ├── verify.sh                   # Runs exploit against shared env, verifies, captures evidence
 │   │   └── RESULT.md                   # Execution evidence (PASS/FAIL)
 │   ├── 02-csrf-header-bypass/
 │   │   └── ...
 ```
 
-Every PoC is fully self-contained and reproducible:
+The base environment stays running for the entire audit. PoCs run against it:
 ```bash
-cd pocs/01-share-password-hash-leak
-bash verify.sh   # spins up Docker, runs exploit, verifies, captures evidence, tears down
+cd base-environment && docker compose up -d --wait
+cd ../pocs/01-share-password-hash-leak
+bash verify.sh   # runs exploit against shared env, verifies, captures evidence
 ```
 
 ## Requirements
@@ -116,9 +131,10 @@ claude -p "go"
 
 
 That's it. The agents will:
-1. Look around and identify the project, language, Docker setup, and subsystems
-2. Work through each subsystem with the full 7-stage pipeline
-3. Produce FINDINGS.md, WEAK.md, and self-contained PoCs
+1. Look around, identify the project, and build a base environment from the target's source code
+2. Group the codebase into 5-7 subsystems by attack surface
+3. Work through each subsystem with the full pipeline (discovery → analysis → adversarial review → PoC → review → report)
+4. Produce FINDINGS.md, WEAK.md, and PoCs that run against the shared environment
 
 ### 3. Walk away
 
@@ -130,7 +146,7 @@ screen -S vulnresearch
 claude
 # type: go
 # detach: Ctrl+A, D
-# reattach later: screen -r vram
+# reattach later: screen -r vulnresearch
 ```
 
 Headless mode:
@@ -149,7 +165,7 @@ claude
 Ask anything:
 ```
 summarize the findings
-explain the debate on finding 03
+explain the adversarial review on finding 03
 are there any chains between weak findings?
 why did the PoC for 05 fail?
 ```
@@ -180,41 +196,49 @@ why did the PoC for 05 fail?
 ### Pipeline (per subsystem)
 
 ```
-Stage 1  DISCOVERY         Hunter scans the subsystem
-Stage 2  ANALYSIS          Analyst verifies each finding (rejects → WEAK.md)
-Stage 3  DEBATE ROUND 1    Analyst ◄──► DA, 3-4 exchanges per finding (rejects → WEAK.md)
-Stage 4  PoC ENGINEERING   PoC Builder creates docker-compose + exploit per surviving finding
-Stage 5  EXECUTION         PoC Runner executes, Builder fixes on failure (max 2 retries)
-Stage 6  DEBATE ROUND 2    Analyst ◄──► DA with PoC evidence (rejects → WEAK.md)
-Stage 7  SYNTHESIS          Reports written, FINDINGS.md + WEAK.md updated, quality gate checked
+Stage 0  BASE ENVIRONMENT   Build target from source, keep running (once at start)
+         ─────────────────────────────────────────────────────────────────────
+Stage 1  DISCOVERY           Hunter scans subsystem, self-filters LOW to WEAK.md
+Stage 2  ANALYSIS            Analyst verifies root cause + reachability (rejects → WEAK.md)
+Stage 3  REVIEW ROUND 1      Challenger challenges → Defender rebuts → Team lead rules
+Stage 4  PoC ENGINEERING     Phase 1: Recon endpoints. Phase 2: Build exploit
+Stage 5  EXECUTION            PoC Runner runs against shared env (max 2 retries for POC_BUG)
+Stage 6  REVIEW ROUND 2      Challenger + Defender with PoC evidence → final classification
+Stage 7  SYNTHESIS            Reports written, FINDINGS.md + WEAK.md updated, quality gate
 ```
 
 ### Classification
 
 | Classification | Requires |
 |---------------|----------|
-| **CONFIRMED** | PoC PASS + survived both debate rounds |
-| **PLAUSIBLE** | Strong analysis but PoC failed or debate impasse |
+| **CONFIRMED** | PoC PASS + survived both review rounds |
+| **PLAUSIBLE** | Strong analysis but PoC failed (POC_BUG after retries) or ENV_MISMATCH |
 | **REJECTED** | Disproved by evidence → logged in WEAK.md for chaining review |
 
-### Debate rounds
+### PoC failure classification
 
-Agents are spawned as simultaneous Claude Code teammates and message each other directly:
+Not all PoC failures are equal:
+
+| Failure type | Meaning | Counts against finding? |
+|-------------|---------|------------------------|
+| `TARGET_NOT_VULNERABLE` | Server correctly blocked the attack | Yes |
+| `POC_BUG` | Script error, wrong endpoint, bash syntax | No — Builder fixes, retry |
+| `ENV_MISMATCH` | Source code differs from running target | No — flagged for manual review |
+
+### Adversarial review
+
+Sequential challenge/rebuttal with separate agents (not simultaneous messaging):
 
 ```
-DEBATE ROUND 1 — "Is this real?"
-  Analyst:  "This is exploitable because input at line 342 reaches memcpy unchecked"
-  DA:       "validate_input() at line 298 caps the buffer to 256 bytes"
-  Analyst:  "validate_input() only runs on the v2 path. The v1 path skips it"
-  DA:       "Confirmed, v1 is unguarded. I concede."
-  → Finding survives
+REVIEW ROUND 1 — "Is this real?"
+  Challenger:  "validate_input() at line 298 caps the buffer to 256 bytes"
+  Defender:    "validate_input() only runs on the v2 path. The v1 path skips it"
+  Team lead:   Defender refuted the challenge. Finding survives.
 
-DEBATE ROUND 2 — "Is this correctly rated?"
-  Analyst:  "PoC passed. CRITICAL — remote pre-auth RCE"
-  DA:       "PoC only proved a crash, not code execution. And requires non-default config"
-  Analyst:  "Fair on crash vs RCE. But the config is common in enterprise deployments"
-  DA:       "Agreed on HIGH — real DoS, plausible RCE, common config"
-  → Downgraded from CRITICAL to HIGH
+REVIEW ROUND 2 — "Is this correctly rated?"
+  Challenger:  "PoC only proved a crash, not code execution. Requires non-default config"
+  Defender:    "Fair on crash vs RCE. But the config is common in enterprise deployments"
+  Team lead:   Mixed — downgrade from CRITICAL to HIGH. Real DoS, plausible RCE.
 ```
 
 ### WEAK.md — nothing is thrown away
