@@ -250,21 +250,43 @@ After building: health endpoint responds, admin logs in, key APIs work. If broke
 
 **8-10 subsystems. Do NOT group.** Each gets its own full pipeline pass.
 
-Example for Nextcloud:
-```
-1. Authentication & Login (auth flows, brute-force, session)
-2. Sharing (share API, public links, permissions)
-3. WebDAV (PROPFIND, upload, ACL, path handling)
-4. OAuth2 (token lifecycle, state handling, redirect validation)
-5. File Operations (preview, thumbnails, trash, versions)
-6. OCS API (provisioning, user management, capabilities)
-7. CSRF/CORS/Security Middleware (headers, middleware chain)
-8. Encryption (server-side, key management, recovery)
-9. External Storage (backends, credential handling, SSRF surface)
-10. Federation & LDAP (OCM protocol, LDAP injection, trust)
-```
+How to identify subsystems:
+1. Map the application's major functional areas
+2. Identify each distinct protocol or standard the application implements
+3. Separate security infrastructure from business logic
+4. Any area with its own trust boundary or auth model gets its own subsystem
+5. If two areas share no code paths, they are separate subsystems
 
-V4 found real bugs in OAuth2, LDAP, federation, external storage, and encryption — all of which would be missed if grouped together.
+**Signs you've grouped too aggressively:**
+- A subsystem covers 2+ unrelated directories with no shared code
+- The Hunter prompt lists more than 8 focus areas
+- You're using "and" in the subsystem name
+
+**Signs you haven't split enough:**
+- Fewer than 8 subsystems for a non-trivial application
+- A subsystem covers >30% of the codebase
+- The Hunter would need to read 40+ files to cover the scope
+
+## Pre-Subsystem Checklist (MANDATORY)
+
+Before spawning the first agent for any subsystem, write this to the chat:
+
+"Starting subsystem {N}: {name}
+Agents I will spawn in order:
+1. hunter-{name}
+2. fuzzer-{name}
+3. analyst-{name}
+4. challenger-{name}
+5. defender-{name}
+6. [PoC build + execution]
+7. challenger-{name}-r2
+8. defender-{name}-r2
+9. [Synthesis + quality gate + compact]
+
+Context tokens used: ~{estimate}
+Subsystems remaining after this: {count}"
+
+This pre-commitment makes it harder to skip stages later.
 
 ## Stage 1: Discovery
 
@@ -634,6 +656,15 @@ Preserved for chaining. Harmless alone, potentially dangerous combined.
 - ❌ "Given context limits, I'll fast-track the remaining subsystems"
 - ✅ Compact after the current subsystem, resume fresh with full pipeline
 
+### NEVER combine pipeline stages into one agent
+- ❌ "Combined Analyst+Review" or "Combined Challenger+Defender"
+- ❌ "Let me run Analyst and adversarial review together for efficiency"
+- ✅ Analyst = one agent spawn. Challenger = one agent spawn. Defender = one agent spawn.
+- **Each stage is a separate agent spawn with a separate name. No exceptions.**
+- **If you catch yourself writing "combined" or "efficient" about pipeline stages, STOP. 
+  That's the shortcut instinct. Spawn them separately.**
+
+
 ### Quality Gate Verification
 Before marking a subsystem complete, the team lead must list the agents 
 actually spawned for this subsystem by checking progress.json agent_log:
@@ -673,11 +704,22 @@ If ANY is missing, the subsystem is NOT complete. Go back and run the missing st
 17. **Senior Hunter + Chaining after all subsystems.**
 18. **Thoroughness over speed. Always.**
 
-## Compact Instructions
+## Mandatory Compaction Protocol
 
-**WHEN:** After each completed subsystem.
-**HOW:** `/compact focus on: subsystem progress, base environment, findings list, what's next`
-**Recovery:** Re-read `progress.json`, `FINDINGS.md`, `WEAK.md`. Verify base environment: `curl localhost:{port}`. Resume.
+**After EVERY completed subsystem, before starting the next:**
+
+1. Write quality gate to progress.json (including agent_log)
+2. Verify agent_log contains all 7 required entries
+3. If ANY missing → go back and run the missing stage
+4. Update FINDINGS.md + WEAK.md
+5. Run: /compact focus on: completed subsystems summary, current findings 
+   list, base environment config, next subsystem to process
+6. After compaction: re-read progress.json, FINDINGS.md, verify base 
+   environment is running
+7. Then and only then: begin next subsystem
+
+**This is not optional. Skipping compaction to "save time" leads to context 
+pressure which leads to shortcuts which leads to invalid results.**
 
 ## progress.json
 
