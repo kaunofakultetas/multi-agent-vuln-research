@@ -74,7 +74,7 @@ for subsystem in $SUBSYSTEMS; do
     fi
 
     run_claude "subsystem-${subsystem}" "
-Process subsystem '${subsystem}' through the FULL pipeline (Stages 1–7) as
+Process subsystem '${subsystem}' through the FULL pipeline (Stages 1-7) as
 defined in CLAUDE.md. Read progress.json for current state and resume if
 partially done. Run ALL stages in order: Hunter, Fuzzer, Analyst, Challenger,
 Defender, PoC engineering + execution, second Challenger + Defender review,
