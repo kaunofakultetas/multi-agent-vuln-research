@@ -19,7 +19,7 @@ run_claude() {
     echo "=== $label — $(date) ===" >> "$logfile"
     
     # Stream text live (not raw JSON) with a minimal parser.
-    claude -p "$prompt" --output-format stream-json --verbose --include-partial-messages < /dev/null 2>&1 \
+    claude -p "$prompt" --output-format stream-json --verbose --include-partial-messages --effort max < /dev/null 2>&1 \
         | jq --unbuffered -Rrj '
             (fromjson? // empty)
             | if .type == "stream_event" and .event.type == "content_block_delta" then
