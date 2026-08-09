@@ -10,6 +10,26 @@ CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
 
 Full sandbox. All agents have unrestricted bash, docker, and network access. Every command is safe to run.
 
+## Headless Execution — NEVER Yield Mid-Subsystem (CRITICAL)
+
+This pipeline runs under `claude -p` (headless). **A headless session ends the moment you end your turn without a pending tool call.** If you spawn a background agent and then send a plain "waiting for it to finish" message, YOUR TURN ENDS, the `claude -p` process exits, and the whole subsystem is abandoned half-done — no Analyst, no review, no PoCs, nothing written to FINDINGS.md. This already happened once: authentication died right after the Hunter and lost 20 findings.
+
+Keep ONE live session carrying full context across all 7 stages of the subsystem. Rules:
+
+1. **Prefer synchronous spawns.** Spawn each pipeline agent so the call BLOCKS and returns its report inline (foreground). A synchronous subagent does **not** cost more of *your* context than a background one — the subagent reads files in ITS OWN context window; only its final report returns to you either way. Foreground spawning is what lets a single session carry every stage without ending the turn.
+
+2. **If you spawn in the background, you MUST NOT end your turn while it runs.** Immediately issue a BLOCKING foreground command that waits, and keep the turn alive until the result is back. NEVER emit a bare "waiting…" message and stop. Concrete keep-alive — instruct each background agent to `touch logs/agents/<name>.done` and write its report to `logs/agents/<name>.json` as its last action, then block on it:
+   ```bash
+   mkdir -p logs/agents
+   until [ -f logs/agents/hunter-<subsystem>.done ]; do sleep 10; done
+   cat logs/agents/hunter-<subsystem>.json    # pull the result back into context
+   ```
+   Each `sleep` is a tool call that keeps your turn alive; the loop only returns once the agent has signalled done. If no sentinel is available, poll in a foreground `sleep` loop and keep the turn open until the completion notification arrives — never stop and yield.
+
+3. **Do not stop until the subsystem is COMPLETE.** Your turn ends only when this subsystem's `status` is `"complete"` in progress.json (all 7 stages ran and the quality gate passed). Until then there is always a next stage — run it. Never conclude the turn in the middle of the pipeline.
+
+4. **Persist as you go.** After EACH stage, update progress.json (`agent_log` + `current_stage`), append findings to FINDINGS.md, rejects to WEAK.md, PoCs to pocs/. This way, if the process is nonetheless killed (OOM / crash / context limit), the runner re-invokes a fresh session that resumes from disk instead of restarting the subsystem.
+
 ## On Session Start
 
 When the user says `/vulnresearch` or `go` or anything that signals to start:

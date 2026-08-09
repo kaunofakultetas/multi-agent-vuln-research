@@ -1,11 +1,14 @@
 {
   "env": {
-    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "IS_SANDBOX": "1"
   },
   "permissions": {
     "defaultMode": "acceptEdits",
     "allow": [
       "Bash",
+      "Bash(docker:*)",
+      "Bash(docker-compose:*)",
       "Read",
       "Edit",
       "MultiEdit",

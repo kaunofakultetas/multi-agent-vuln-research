@@ -3,6 +3,15 @@ set -euo pipefail
 
 mkdir -p logs
 
+# ============================================================
+# Throwaway VM: give Claude unrestricted access.
+# --dangerously-skip-permissions bypasses ALL permission checks
+# (docker, network, bash) so headless `claude -p` never stalls on
+# an un-answerable approval prompt. Running as root normally blocks
+# that flag; IS_SANDBOX=1 lifts the root guard.
+# ============================================================
+export IS_SANDBOX=1
+
 
 # ============================================================
 # Helper function to run Claude
@@ -19,7 +28,7 @@ run_claude() {
     echo "=== $label — $(date) ===" >> "$logfile"
     
     # Stream text live (not raw JSON) with a minimal parser.
-    claude -p "$prompt" --output-format stream-json --verbose --include-partial-messages --effort max < /dev/null 2>&1 \
+    claude -p "$prompt" --model 'claude-opus-4-6[1m]' --dangerously-skip-permissions --output-format stream-json --verbose --include-partial-messages --effort max < /dev/null 2>&1 \
         | jq --unbuffered -Rrj '
             (fromjson? // empty)
             | if .type == "stream_event" and .event.type == "content_block_delta" then
@@ -63,24 +72,92 @@ fi
 
 # ============================================================
 # STAGES 1-7: Process each subsystem
+#
+# Each subsystem runs in ONE long-lived claude session that must keep its turn
+# alive across all 7 stages (see CLAUDE.md "Headless Execution — NEVER Yield
+# Mid-Subsystem"). As a SAFETY NET only, if that session dies anyway (crash /
+# OOM / context limit), we re-invoke it: a fresh session reads progress.json +
+# FINDINGS.md + WEAK.md and resumes from the first unfinished stage. We keep
+# re-invoking until progress.json marks the subsystem "complete".
 # ============================================================
+MAX_ATTEMPTS_PER_SUBSYSTEM="${MAX_ATTEMPTS_PER_SUBSYSTEM:-8}"
+
+# complete if status==complete OR the quality gate says all stages are done
+subsystem_complete() {
+    jq -e --arg s "$1" '
+        .subsystems[] | select(.name == $s)
+        | (.status == "complete") or ((.quality_gate.all_stages_completed // false) == true)
+    ' progress.json > /dev/null 2>&1
+}
+
+# a snapshot of forward progress; if it does not change across a whole attempt,
+# the run made no progress and we stop retrying to avoid an infinite loop
+subsystem_fingerprint() {
+    local s="$1" pj findings pocs
+    pj=$(jq -rc --arg s "$s" '(.subsystems[] | select(.name==$s) | [.status, (.current_stage // "-"), ((.quality_gate // {}) | tostring)]) // []' progress.json 2>/dev/null || true)
+    findings=$( [ -f FINDINGS.md ] && wc -l < FINDINGS.md || echo 0 )
+    pocs=$( ls -d pocs/*/ 2>/dev/null | wc -l || true )
+    echo "${pj}|F:${findings}|P:${pocs}"
+}
+
 SUBSYSTEMS=$(jq -r '.subsystems[].name' progress.json)
 
 for subsystem in $SUBSYSTEMS; do
-    status=$(jq -r --arg s "$subsystem" '.subsystems[] | select(.name == $s) | .status' progress.json)
-    if [ "$status" = "complete" ]; then
+    if subsystem_complete "$subsystem"; then
         echo "Skipping $subsystem (already complete)"
         continue
     fi
 
-    run_claude "subsystem-${subsystem}" "
+    attempt=0
+    last_fp=""
+    stalls=0
+    while ! subsystem_complete "$subsystem"; do
+        attempt=$((attempt + 1))
+        if [ "$attempt" -gt "$MAX_ATTEMPTS_PER_SUBSYSTEM" ]; then
+            echo "!!! '$subsystem' still not complete after $MAX_ATTEMPTS_PER_SUBSYSTEM attempts — moving on. Inspect progress.json."
+            break
+        fi
+
+        echo ">>> Subsystem '$subsystem' — attempt $attempt/$MAX_ATTEMPTS_PER_SUBSYSTEM"
+        run_claude "subsystem-${subsystem}-a${attempt}" "
 Process subsystem '${subsystem}' through the FULL pipeline (Stages 1-7) as
-defined in CLAUDE.md. Read progress.json for current state and resume if
-partially done. Run ALL stages in order: Hunter, Fuzzer, Analyst, Challenger,
-Defender, PoC engineering + execution, second Challenger + Defender review,
-and Synthesis. Do NOT skip any stage. Do NOT move to the next subsystem.
-Update progress.json quality gate and mark this subsystem complete when done.
-"
+defined in CLAUDE.md.
+
+DO NOT STOP until this subsystem is marked \"complete\" in progress.json. Obey
+CLAUDE.md 'Headless Execution — NEVER Yield Mid-Subsystem': keep THIS session's
+turn alive across every stage. If you spawn a background agent, do NOT end your
+turn to 'wait' — block in the foreground (synchronous spawn, or a foreground
+'sleep' poll loop on logs/agents/<name>.done) until its result is back, then
+continue to the next stage.
+
+First read progress.json, FINDINGS.md and WEAK.md and RESUME from the first
+stage that has not completed for '${subsystem}'. Do not redo finished stages.
+Run every remaining stage in order: Hunter, Fuzzer, Analyst, Challenger,
+Defender, PoC build + execution, second Challenger + Defender review, Synthesis.
+Persist after EACH stage (progress.json agent_log + current_stage, FINDINGS.md,
+WEAK.md, pocs/) so a later invocation can resume if this one is killed. Do NOT
+move on to any other subsystem. Mark this subsystem \"complete\" only when all
+stages ran and the quality gate passed.
+" || true
+
+        # stall detection: no forward progress recorded this whole attempt
+        fp=$(subsystem_fingerprint "$subsystem")
+        if [ -n "$last_fp" ] && [ "$fp" = "$last_fp" ]; then
+            stalls=$((stalls + 1))
+            echo "    (no progress recorded on attempt $attempt; stall $stalls/2)"
+            if [ "$stalls" -ge 2 ]; then
+                echo "!!! '$subsystem' made no progress in 2 consecutive attempts — moving on to avoid an infinite loop. Inspect progress.json."
+                break
+            fi
+        else
+            stalls=0
+        fi
+        last_fp="$fp"
+    done
+
+    if subsystem_complete "$subsystem"; then
+        echo ">>> Subsystem '$subsystem' COMPLETE after $attempt attempt(s)."
+    fi
 done
 
 # ============================================================
